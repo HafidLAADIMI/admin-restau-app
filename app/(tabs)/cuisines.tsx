@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, FlatList, TouchableOpacity, ActivityIndicator, Image, TextInput, Alert } from 'react-native';
-import { getCuisines, Cuisine } from '../../lib/firebase';
+import { View, Text, FlatList, TouchableOpacity, ActivityIndicator, Image, TextInput, Alert, StyleSheet } from 'react-native';
+import {getCuisines, Cuisine, addCuisine, updateCuisine} from '../../services/cuisineService';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { COLORS, FONTS, BORDER_RADIUS } from '../../constants/theme';
 import { useRouter } from 'expo-router';
@@ -8,6 +8,8 @@ import { StatusBar } from 'expo-status-bar';
 import * as ImagePicker from 'expo-image-picker';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { doc, getFirestore, setDoc, updateDoc, deleteDoc, collection } from 'firebase/firestore';
+import { BlurView } from 'expo-blur';
+import {uploadToCloudinary} from "../../services/cloudinaryService";
 
 export default function CuisinesScreen() {
     const [cuisines, setCuisines] = useState<Cuisine[]>([]);
@@ -30,7 +32,7 @@ export default function CuisinesScreen() {
             setCuisines(cuisinesData);
         } catch (error) {
             console.error('Error fetching cuisines:', error);
-            Alert.alert('Error', 'Failed to load cuisines. Please try again.');
+            Alert.alert('Erreur', 'Impossible de charger les cuisines. Veuillez réessayer.');
         } finally {
             setLoading(false);
             setRefreshing(false);
@@ -66,25 +68,21 @@ export default function CuisinesScreen() {
 
     const handleDeleteCuisine = async (cuisineId: string) => {
         Alert.alert(
-            'Delete Cuisine',
-            'Are you sure you want to delete this cuisine? This action cannot be undone.',
+            'Supprimer la cuisine',
+            'Êtes-vous sûr de vouloir supprimer cette cuisine ? Cette action est irréversible.',
             [
-                { text: 'Cancel', style: 'cancel' },
+                { text: 'Annuler', style: 'cancel' },
                 {
-                    text: 'Delete',
+                    text: 'Supprimer',
                     style: 'destructive',
                     onPress: async () => {
                         try {
-                            // Delete the cuisine from Firestore
                             await deleteDoc(doc(db, 'cuisines', cuisineId));
-
-                            // Update the local state
                             setCuisines(cuisines.filter(c => c.id !== cuisineId));
-
-                            Alert.alert('Success', 'Cuisine deleted successfully');
+                            Alert.alert('Succès', 'Cuisine supprimée avec succès');
                         } catch (error) {
                             console.error('Error deleting cuisine:', error);
-                            Alert.alert('Error', 'Failed to delete cuisine. Please try again.');
+                            Alert.alert('Erreur', 'Échec de la suppression de la cuisine. Veuillez réessayer.');
                         }
                     }
                 }
@@ -106,116 +104,153 @@ export default function CuisinesScreen() {
     };
 
     const uploadImage = async (uri: string, path: string): Promise<string> => {
-        // Fetch the image
         const response = await fetch(uri);
         const blob = await response.blob();
-
-        // Upload to Firebase Storage
         const storageRef = ref(storage, path);
         await uploadBytes(storageRef, blob);
-
-        // Get the download URL
         return getDownloadURL(storageRef);
     };
 
+    // Updated handleSaveCuisine function for better error handling and loading state
     const handleSaveCuisine = async () => {
         if (!name.trim()) {
-            Alert.alert('Error', 'Please enter a cuisine name');
+            Alert.alert('Erreur', 'Veuillez entrer un nom de cuisine');
             return;
         }
+
+        // Initialize loading state
+        setLoading(true);
 
         try {
             let imageUrl = image;
 
-            // If it's a local image, upload it first
+            // Step 1: Upload image to Cloudinary if it's a local file
             if (image && image.startsWith('file://')) {
-                const path = `cuisines/${Date.now()}.jpg`;
-                imageUrl = await uploadImage(image, path);
+                try {
+                    console.log('Démarrage du téléchargement vers Cloudinary...');
+                    // Use the cloudinaryService directly for better error handling
+                    imageUrl = await uploadToCloudinary(image, 'cuisines');
+                    console.log('Image téléchargée sur Cloudinary:', imageUrl);
+                } catch (cloudinaryError) {
+                    console.error('Erreur lors du téléchargement de l\'image vers Cloudinary:', cloudinaryError);
+                    Alert.alert('Erreur', 'Échec du téléchargement de l\'image. Veuillez réessayer.');
+                    setLoading(false);
+                    return;
+                }
             }
 
+            // Step 2: Save data to Firebase using the service functions
             if (editMode && currentCuisine) {
                 // Update existing cuisine
-                await updateDoc(doc(db, 'cuisines', currentCuisine.id), {
-                    name,
-                    description,
-                    image: imageUrl,
-                    updatedAt: new Date(),
-                });
+                try {
+                    console.log('Mise à jour d\'une cuisine existante:', currentCuisine.id);
+                    const success = await updateCuisine(
+                        currentCuisine.id,
+                        {
+                            name,
+                            description
+                        },
+                        image && image.startsWith('file://') ? image : undefined // Only pass image if it's a new local file
+                    );
 
-                // Update local state
-                setCuisines(cuisines.map(c =>
-                    c.id === currentCuisine.id
-                        ? { ...c, name, description, image: imageUrl || '' }
-                        : c
-                ));
+                    if (success) {
+                        // Update local state
+                        setCuisines(cuisines.map(c =>
+                            c.id === currentCuisine.id
+                                ? { ...c, name, description, image: imageUrl || '' }
+                                : c
+                        ));
 
-                Alert.alert('Success', 'Cuisine updated successfully');
+                        Alert.alert('Succès', 'Cuisine mise à jour avec succès');
+                        setModalVisible(false);
+                        resetForm();
+                    } else {
+                        throw new Error('Échec de la mise à jour de la cuisine');
+                    }
+                } catch (error) {
+                    console.error('Erreur lors de la mise à jour de la cuisine:', error);
+                    Alert.alert('Erreur', 'Échec de la mise à jour de la cuisine. Veuillez réessayer.');
+                }
             } else {
                 // Add new cuisine
-                const newCuisineRef = doc(collection(db, 'cuisines'));
-                await setDoc(newCuisineRef, {
-                    name,
-                    description,
-                    image: imageUrl,
-                    restaurantCount: 0,
-                    createdAt: new Date(),
-                    updatedAt: new Date(),
-                });
-
-                // Update local state
-                setCuisines([
-                    ...cuisines,
-                    {
-                        id: newCuisineRef.id,
+                try {
+                    console.log('Ajout d\'une nouvelle cuisine...');
+                    const newCuisineId = await addCuisine(
                         name,
                         description,
-                        image: imageUrl || '',
-                        restaurantCount: 0
+                        imageUrl || ''
+                    );
+
+                    if (newCuisineId) {
+                        // Add to local state
+                        setCuisines([
+                            ...cuisines,
+                            {
+                                id: newCuisineId,
+                                name,
+                                description,
+                                image: imageUrl || '',
+                            }
+                        ]);
+
+                        Alert.alert('Succès', 'Cuisine ajoutée avec succès');
+                        setModalVisible(false);
+                        resetForm();
+                    } else {
+                        throw new Error('Échec de l\'ajout de la cuisine');
                     }
-                ]);
-
-                Alert.alert('Success', 'Cuisine added successfully');
+                } catch (error) {
+                    console.error('Erreur lors de l\'ajout de la cuisine:', error);
+                    Alert.alert('Erreur', 'Échec de l\'ajout de la cuisine. Veuillez réessayer.');
+                }
             }
-
-            // Reset form and close modal
-            setModalVisible(false);
-            setName('');
-            setDescription('');
-            setImage(null);
-            setCurrentCuisine(null);
-
         } catch (error) {
-            console.error('Error saving cuisine:', error);
-            Alert.alert('Error', 'Failed to save cuisine. Please try again.');
+            console.error('Erreur globale dans handleSaveCuisine:', error);
+            Alert.alert('Erreur', 'Une erreur inattendue s\'est produite. Veuillez réessayer.');
+        } finally {
+            setLoading(false);
         }
+    };
+
+// Helper function to reset the form
+    const resetForm = () => {
+        setName('');
+        setDescription('');
+        setImage(null);
+        setCurrentCuisine(null);
+        setEditMode(false);
     };
 
     const renderItem = ({ item }: { item: Cuisine }) => {
         return (
-            <View className="bg-white rounded-lg overflow-hidden mb-4 shadow-sm">
-                {item.image ? (
-                    <Image
-                        source={{ uri: item.image }}
-                        className="w-full h-40"
-                        resizeMode="cover"
-                    />
-                ) : (
-                    <View className="w-full h-40 bg-gray-200 justify-center items-center">
-                        <Feather name="image" size={48} color={COLORS.gray.DEFAULT} />
-                    </View>
-                )}
+            <View className="bg-white rounded-xl overflow-hidden mb-4 shadow-md">
+                <View className="relative">
+                    {item.image ? (
+                        <Image
+                            source={{ uri: item.image }}
+                            className="w-full h-48"
+                            resizeMode="cover"
+                        />
+                    ) : (
+                        <View className="w-full h-48 bg-gray-200 justify-center items-center">
+                            <Feather name="image" size={48} color={COLORS.gray.DEFAULT} />
+                        </View>
+                    )}
+
+                    <BlurView intensity={70} className="absolute bottom-0 w-full p-4">
+                        <Text
+                            className="text-xl font-bold text-white mb-1"
+                            style={{ fontFamily: FONTS.bold }}
+                        >
+                            {item.name}
+                        </Text>
+                    </BlurView>
+                </View>
 
                 <View className="p-4">
-                    <Text
-                        className="text-lg font-semibold mb-1"
-                        style={{ fontFamily: FONTS.semiBold }}
-                    >
-                        {item.name}
-                    </Text>
-
                     {item.description && (
                         <Text
-                            className="text-gray-700 mb-2"
+                            className="text-gray-700 mb-3"
                             style={{ fontFamily: FONTS.regular }}
                             numberOfLines={2}
                         >
@@ -224,13 +259,6 @@ export default function CuisinesScreen() {
                     )}
 
                     <View className="flex-row justify-between items-center mt-2">
-                        <Text
-                            className="text-gray-500"
-                            style={{ fontFamily: FONTS.medium }}
-                        >
-                            {item.restaurantCount || 0} Restaurants
-                        </Text>
-
                         <View className="flex-row">
                             <TouchableOpacity
                                 onPress={() => handleEditCuisine(item)}
@@ -254,119 +282,131 @@ export default function CuisinesScreen() {
         );
     };
 
-    // Modal Component
     const renderModal = () => {
         if (!modalVisible) return null;
 
         return (
             <View className="absolute inset-0 bg-black bg-opacity-50 justify-center items-center p-4 z-10">
-                <View className="bg-white w-full rounded-lg p-6 max-w-md">
-                    <Text
-                        className="text-xl font-semibold mb-4"
-                        style={{ fontFamily: FONTS.semiBold }}
-                    >
-                        {editMode ? 'Edit Cuisine' : 'Add New Cuisine'}
-                    </Text>
-
-                    <TouchableOpacity
-                        onPress={pickImage}
-                        className="w-full h-40 rounded-lg mb-4 justify-center items-center border-2 border-dashed border-gray-300"
-                        style={{ borderRadius: BORDER_RADIUS.md }}
-                    >
-                        {image ? (
-                            <Image
-                                source={{ uri: image }}
-                                className="w-full h-full rounded-lg"
-                                resizeMode="cover"
-                            />
-                        ) : (
-                            <View className="items-center">
-                                <Feather name="image" size={48} color={COLORS.gray.DEFAULT} />
+                <View className="bg-white w-full rounded-2xl p-6 max-w-md">
+                    {loading ? (
+                        <View className="items-center justify-center py-10">
+                            <ActivityIndicator size="large" color={COLORS.primary.DEFAULT} />
+                            <Text
+                                className="mt-4 text-gray-600"
+                                style={{ fontFamily: FONTS.medium }}
+                            >
+                                {editMode ? 'Mise à jour de la cuisine...' : 'Ajout de la cuisine...'}
+                            </Text>
+                        </View>
+                    ) : (
+                        <>
+                            <View className="flex-row justify-between items-center mb-6">
                                 <Text
-                                    className="text-gray-500 mt-2"
+                                    className="text-xl font-semibold"
+                                    style={{ fontFamily: FONTS.semiBold }}
+                                >
+                                    {editMode ? 'Modifier la cuisine' : 'Ajouter une nouvelle cuisine'}
+                                </Text>
+
+                                <TouchableOpacity onPress={() => setModalVisible(false)}>
+                                    <Feather name="x" size={24} color={COLORS.gray.DEFAULT} />
+                                </TouchableOpacity>
+                            </View>
+
+                            <TouchableOpacity
+                                onPress={pickImage}
+                                className="w-full h-48 rounded-xl mb-4 justify-center items-center border-2 border-dashed border-gray-300"
+                            >
+                                {image ? (
+                                    <Image
+                                        source={{ uri: image }}
+                                        className="w-full h-full rounded-xl"
+                                        resizeMode="cover"
+                                    />
+                                ) : (
+                                    <View className="items-center">
+                                        <Feather name="image" size={48} color={COLORS.gray.DEFAULT} />
+                                        <Text
+                                            className="text-gray-500 mt-2"
+                                            style={{ fontFamily: FONTS.medium }}
+                                        >
+                                            Appuyez pour sélectionner une image
+                                        </Text>
+                                    </View>
+                                )}
+                            </TouchableOpacity>
+
+                            <View className="mb-4">
+                                <Text
+                                    className="text-gray-700 mb-1"
                                     style={{ fontFamily: FONTS.medium }}
                                 >
-                                    Tap to select image
+                                    Nom
                                 </Text>
+                                <TextInput
+                                    className="border border-gray-300 rounded-xl p-3"
+                                    style={{ fontFamily: FONTS.regular }}
+                                    value={name}
+                                    onChangeText={setName}
+                                    placeholder="Entrez le nom de la cuisine"
+                                />
                             </View>
-                        )}
-                    </TouchableOpacity>
 
-                    <View className="mb-4">
-                        <Text
-                            className="text-gray-700 mb-1"
-                            style={{ fontFamily: FONTS.medium }}
-                        >
-                            Name
-                        </Text>
-                        <TextInput
-                            className="border border-gray-300 rounded-lg p-3"
-                            style={{
-                                fontFamily: FONTS.regular,
-                                borderRadius: BORDER_RADIUS.md
-                            }}
-                            value={name}
-                            onChangeText={setName}
-                            placeholder="Enter cuisine name"
-                        />
-                    </View>
+                            <View className="mb-6">
+                                <Text
+                                    className="text-gray-700 mb-1"
+                                    style={{ fontFamily: FONTS.medium }}
+                                >
+                                    Description
+                                </Text>
+                                <TextInput
+                                    className="border border-gray-300 rounded-xl p-3"
+                                    style={{
+                                        fontFamily: FONTS.regular,
+                                        minHeight: 80,
+                                        textAlignVertical: 'top'
+                                    }}
+                                    value={description}
+                                    onChangeText={setDescription}
+                                    placeholder="Entrez la description de la cuisine"
+                                    multiline
+                                    numberOfLines={3}
+                                />
+                            </View>
 
-                    <View className="mb-4">
-                        <Text
-                            className="text-gray-700 mb-1"
-                            style={{ fontFamily: FONTS.medium }}
-                        >
-                            Description
-                        </Text>
-                        <TextInput
-                            className="border border-gray-300 rounded-lg p-3"
-                            style={{
-                                fontFamily: FONTS.regular,
-                                borderRadius: BORDER_RADIUS.md,
-                                minHeight: 80,
-                                textAlignVertical: 'top'
-                            }}
-                            value={description}
-                            onChangeText={setDescription}
-                            placeholder="Enter cuisine description"
-                            multiline
-                            numberOfLines={3}
-                        />
-                    </View>
+                            <View className="flex-row justify-end space-x-3">
+                                <TouchableOpacity
+                                    onPress={() => setModalVisible(false)}
+                                    className="px-5 py-3 rounded-xl"
+                                    style={{
+                                        backgroundColor: COLORS.gray.light,
+                                    }}
+                                >
+                                    <Text
+                                        className="text-gray-700"
+                                        style={{ fontFamily: FONTS.medium }}
+                                    >
+                                        Annuler
+                                    </Text>
+                                </TouchableOpacity>
 
-                    <View className="flex-row justify-end mt-2">
-                        <TouchableOpacity
-                            onPress={() => setModalVisible(false)}
-                            className="mr-2 px-4 py-2 rounded-lg"
-                            style={{
-                                backgroundColor: COLORS.gray.light,
-                                borderRadius: BORDER_RADIUS.md
-                            }}
-                        >
-                            <Text
-                                className="text-gray-700"
-                                style={{ fontFamily: FONTS.medium }}
-                            >
-                                Cancel
-                            </Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                            onPress={handleSaveCuisine}
-                            className="px-4 py-2 rounded-lg"
-                            style={{
-                                backgroundColor: COLORS.primary.DEFAULT,
-                                borderRadius: BORDER_RADIUS.md
-                            }}
-                        >
-                            <Text
-                                className="text-white"
-                                style={{ fontFamily: FONTS.medium }}
-                            >
-                                Save
-                            </Text>
-                        </TouchableOpacity>
-                    </View>
+                                <TouchableOpacity
+                                    onPress={handleSaveCuisine}
+                                    className="px-5 py-3 rounded-xl"
+                                    style={{
+                                        backgroundColor: COLORS.primary.DEFAULT,
+                                    }}
+                                >
+                                    <Text
+                                        className="text-white"
+                                        style={{ fontFamily: FONTS.medium }}
+                                    >
+                                        Enregistrer
+                                    </Text>
+                                </TouchableOpacity>
+                            </View>
+                        </>
+                    )}
                 </View>
             </View>
         );
@@ -376,7 +416,7 @@ export default function CuisinesScreen() {
         return (
             <View className="flex-1 justify-center items-center bg-gray-50">
                 <ActivityIndicator size="large" color={COLORS.primary.DEFAULT} />
-                <Text className="mt-2" style={{ fontFamily: FONTS.medium }}>Loading cuisines...</Text>
+                <Text className="mt-2" style={{ fontFamily: FONTS.medium }}>Chargement des cuisines...</Text>
             </View>
         );
     }
@@ -384,7 +424,21 @@ export default function CuisinesScreen() {
     return (
         <>
             <StatusBar style="light" />
-            <View className="flex-1 bg-gray-50 px-4 pt-2">
+            <View className="flex-1 bg-gray-50 px-4 pt-4">
+                <TouchableOpacity
+                    onPress={handleAddCuisine}
+                    className="mb-6 p-4 rounded-xl flex-row items-center justify-center shadow-sm"
+                    style={{ backgroundColor: COLORS.primary.DEFAULT }}
+                >
+                    <Feather name="plus" size={18} color="white" />
+                    <Text
+                        className="text-white ml-2 font-medium"
+                        style={{ fontFamily: FONTS.medium }}
+                    >
+                        Ajouter une Cuisine
+                    </Text>
+                </TouchableOpacity>
+
                 {cuisines.length === 0 ? (
                     <View className="flex-1 justify-center items-center">
                         <Feather name="grid" size={64} color={COLORS.gray.DEFAULT} />
@@ -392,28 +446,15 @@ export default function CuisinesScreen() {
                             className="text-lg text-gray-500 mt-4 text-center"
                             style={{ fontFamily: FONTS.medium }}
                         >
-                            No cuisines found
+                            Aucune cuisine trouvée
                         </Text>
-                        <TouchableOpacity
-                            onPress={handleAddCuisine}
-                            className="mt-4 px-4 py-2 rounded-md flex-row items-center"
-                            style={{ backgroundColor: COLORS.primary.DEFAULT }}
-                        >
-                            <Feather name="plus" size={18} color="white" />
-                            <Text
-                                className="text-white ml-2"
-                                style={{ fontFamily: FONTS.medium }}
-                            >
-                                Add Cuisine
-                            </Text>
-                        </TouchableOpacity>
                     </View>
                 ) : (
                     <FlatList
                         data={cuisines}
                         renderItem={renderItem}
                         keyExtractor={(item) => item.id}
-                        contentContainerStyle={{ paddingVertical: 16 }}
+                        contentContainerStyle={{ paddingBottom: 20 }}
                         showsVerticalScrollIndicator={false}
                         refreshing={refreshing}
                         onRefresh={handleRefresh}

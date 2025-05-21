@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, FlatList, TouchableOpacity, ActivityIndicator, Image, TextInput, Alert } from 'react-native';
-import { getCategories, getCuisines, Category, Cuisine } from '../../lib/firebase';
+import {getCategories, Category, addCategory, updateCategory} from '../../services/categoryService';
+import { getCuisines, Cuisine } from '../../services/cuisineService';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { COLORS, FONTS, BORDER_RADIUS } from '../../constants/theme';
 import { useRouter } from 'expo-router';
@@ -8,6 +9,8 @@ import { StatusBar } from 'expo-status-bar';
 import * as ImagePicker from 'expo-image-picker';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { doc, getFirestore, setDoc, updateDoc, deleteDoc, collection } from 'firebase/firestore';
+import { BlurView } from 'expo-blur';
+import {uploadToCloudinary} from "../../services/cloudinaryService";
 
 export default function CategoriesScreen() {
     const [categories, setCategories] = useState<Category[]>([]);
@@ -22,6 +25,8 @@ export default function CategoriesScreen() {
     const [selectedCuisineId, setSelectedCuisineId] = useState<string | null>(null);
     const [image, setImage] = useState<string | null>(null);
     const [cuisineModalVisible, setCuisineModalVisible] = useState(false);
+    const [filterModalVisible, setFilterModalVisible] = useState(false);
+    const [selectedCuisineFilter, setSelectedCuisineFilter] = useState<string | null>(null);
 
     const router = useRouter();
     const db = getFirestore();
@@ -38,7 +43,7 @@ export default function CategoriesScreen() {
             setCuisines(cuisinesData);
         } catch (error) {
             console.error('Error fetching data:', error);
-            Alert.alert('Error', 'Failed to load data. Please try again.');
+            Alert.alert('Erreur', 'Échec du chargement des données. Veuillez réessayer.');
         } finally {
             setLoading(false);
             setRefreshing(false);
@@ -76,25 +81,21 @@ export default function CategoriesScreen() {
 
     const handleDeleteCategory = async (categoryId: string) => {
         Alert.alert(
-            'Delete Category',
-            'Are you sure you want to delete this category? This action cannot be undone.',
+            'Supprimer la catégorie',
+            'Êtes-vous sûr de vouloir supprimer cette catégorie ? Cette action est irréversible.',
             [
-                { text: 'Cancel', style: 'cancel' },
+                { text: 'Annuler', style: 'cancel' },
                 {
-                    text: 'Delete',
+                    text: 'Supprimer',
                     style: 'destructive',
                     onPress: async () => {
                         try {
-                            // Delete the category from Firestore
                             await deleteDoc(doc(db, 'categories', categoryId));
-
-                            // Update the local state
                             setCategories(categories.filter(c => c.id !== categoryId));
-
-                            Alert.alert('Success', 'Category deleted successfully');
+                            Alert.alert('Succès', 'Catégorie supprimée avec succès');
                         } catch (error) {
                             console.error('Error deleting category:', error);
-                            Alert.alert('Error', 'Failed to delete category. Please try again.');
+                            Alert.alert('Erreur', 'Échec de la suppression de la catégorie. Veuillez réessayer.');
                         }
                     }
                 }
@@ -116,131 +117,188 @@ export default function CategoriesScreen() {
     };
 
     const uploadImage = async (uri: string, path: string): Promise<string> => {
-        // Fetch the image
         const response = await fetch(uri);
         const blob = await response.blob();
-
-        // Upload to Firebase Storage
         const storageRef = ref(storage, path);
         await uploadBytes(storageRef, blob);
-
-        // Get the download URL
         return getDownloadURL(storageRef);
     };
 
+    // Updated handleSaveCategory function for better error handling and loading state
     const handleSaveCategory = async () => {
         if (!name.trim()) {
-            Alert.alert('Error', 'Please enter a category name');
+            Alert.alert('Erreur', 'Veuillez entrer un nom de catégorie');
             return;
         }
 
         if (!selectedCuisineId) {
-            Alert.alert('Error', 'Please select a cuisine');
+            Alert.alert('Erreur', 'Veuillez sélectionner une cuisine');
             return;
         }
+
+        // Set loading state to show loading indicator
+        setLoading(true);
 
         try {
             let imageUrl = image;
 
-            // If it's a local image, upload it first
+            // Step 1: Upload image to Cloudinary if it's a local file
             if (image && image.startsWith('file://')) {
-                const path = `categories/${Date.now()}.jpg`;
-                imageUrl = await uploadImage(image, path);
+                try {
+                    console.log('Démarrage du téléchargement de l\'image vers Cloudinary...');
+                    // Use the cloudinaryService directly for better error handling
+                    imageUrl = await uploadToCloudinary(image, 'categories');
+                    console.log('Image téléchargée sur Cloudinary:', imageUrl);
+                } catch (cloudinaryError) {
+                    console.error('Erreur lors du téléchargement de l\'image vers Cloudinary:', cloudinaryError);
+                    Alert.alert('Erreur', 'Échec du téléchargement de l\'image. Veuillez réessayer.');
+                    setLoading(false);
+                    return;
+                }
             }
 
+            // Step 2: Save data to Firebase using the service functions
             if (editMode && currentCategory) {
                 // Update existing category
-                await updateDoc(doc(db, 'categories', currentCategory.id), {
-                    name,
-                    description,
-                    image: imageUrl,
-                    cuisineId: selectedCuisineId,
-                    updatedAt: new Date(),
-                });
+                try {
+                    console.log('Mise à jour d\'une catégorie existante:', currentCategory.id);
+                    const success = await updateCategory(
+                        currentCategory.id,
+                        {
+                            name,
+                            description,
+                            cuisineId: selectedCuisineId
+                        },
+                        image && image.startsWith('file://') ? image : undefined // Only pass image if it's a new local file
+                    );
 
-                // Update local state
-                setCategories(categories.map(c =>
-                    c.id === currentCategory.id
-                        ? { ...c, name, description, image: imageUrl || '', cuisineId: selectedCuisineId }
-                        : c
-                ));
+                    if (success) {
+                        // Update local state
+                        setCategories(categories.map(c =>
+                            c.id === currentCategory.id
+                                ? {
+                                    ...c,
+                                    name,
+                                    description,
+                                    image: imageUrl || '',
+                                    cuisineId: selectedCuisineId
+                                }
+                                : c
+                        ));
 
-                Alert.alert('Success', 'Category updated successfully');
+                        Alert.alert('Succès', 'Catégorie mise à jour avec succès');
+                        setModalVisible(false);
+                        resetForm();
+                    } else {
+                        throw new Error('Échec de la mise à jour de la catégorie');
+                    }
+                } catch (error) {
+                    console.error('Erreur lors de la mise à jour de la catégorie:', error);
+                    Alert.alert('Erreur', 'Échec de la mise à jour de la catégorie. Veuillez réessayer.');
+                }
             } else {
                 // Add new category
-                const newCategoryRef = doc(collection(db, 'categories'));
-                await setDoc(newCategoryRef, {
-                    name,
-                    description,
-                    image: imageUrl,
-                    cuisineId: selectedCuisineId,
-                    itemCount: 0,
-                    createdAt: new Date(),
-                    updatedAt: new Date(),
-                });
-
-                // Update local state
-                setCategories([
-                    ...categories,
-                    {
-                        id: newCategoryRef.id,
+                try {
+                    console.log('Ajout d\'une nouvelle catégorie...');
+                    const newCategoryId = await addCategory(
                         name,
                         description,
-                        image: imageUrl || '',
-                        cuisineId: selectedCuisineId,
-                        itemCount: 0
+                        selectedCuisineId,
+                        imageUrl || ''
+                    );
+
+                    if (newCategoryId) {
+                        // Add to local state
+                        setCategories([
+                            ...categories,
+                            {
+                                id: newCategoryId,
+                                name,
+                                description,
+                                image: imageUrl || '',
+                                cuisineId: selectedCuisineId,
+                                itemCount: 0
+                            }
+                        ]);
+
+                        Alert.alert('Succès', 'Catégorie ajoutée avec succès');
+                        setModalVisible(false);
+                        resetForm();
+                    } else {
+                        throw new Error('Échec de l\'ajout de la catégorie');
                     }
-                ]);
-
-                Alert.alert('Success', 'Category added successfully');
+                } catch (error) {
+                    console.error('Erreur lors de l\'ajout de la catégorie:', error);
+                    Alert.alert('Erreur', 'Échec de l\'ajout de la catégorie. Veuillez réessayer.');
+                }
             }
-
-            // Reset form and close modal
-            setModalVisible(false);
-            setName('');
-            setDescription('');
-            setSelectedCuisineId(null);
-            setImage(null);
-            setCurrentCategory(null);
-
         } catch (error) {
-            console.error('Error saving category:', error);
-            Alert.alert('Error', 'Failed to save category. Please try again.');
+            console.error('Erreur globale dans handleSaveCategory:', error);
+            Alert.alert('Erreur', 'Une erreur inattendue s\'est produite. Veuillez réessayer.');
+        } finally {
+            setLoading(false);
         }
     };
 
-    const getCuisineName = (cuisineId: string | null) => {
-        if (!cuisineId) return 'None';
-        const cuisine = cuisines.find(c => c.id === cuisineId);
-        return cuisine ? cuisine.name : 'Unknown';
+// Helper function to reset the form
+    const resetForm = () => {
+        setName('');
+        setDescription('');
+        setSelectedCuisineId(null);
+        setImage(null);
+        setCurrentCategory(null);
+        setEditMode(false);
     };
+
+    const getCuisineName = (cuisineId: string | null) => {
+        if (!cuisineId) return 'Aucune';
+        const cuisine = cuisines.find(c => c.id === cuisineId);
+        return cuisine ? cuisine.name : 'Inconnue';
+    };
+
+    const filteredCategories = categories.filter(category => {
+        if (selectedCuisineFilter && category.cuisineId !== selectedCuisineFilter) {
+            return false;
+        }
+        return true;
+    });
 
     const renderItem = ({ item }: { item: Category }) => {
         return (
-            <View className="bg-white rounded-lg overflow-hidden mb-4 shadow-sm">
-                {item.image ? (
-                    <Image
-                        source={{ uri: item.image }}
-                        className="w-full h-40"
-                        resizeMode="cover"
-                    />
-                ) : (
-                    <View className="w-full h-40 bg-gray-200 justify-center items-center">
-                        <Feather name="image" size={48} color={COLORS.gray.DEFAULT} />
-                    </View>
-                )}
+            <View className="bg-white rounded-xl overflow-hidden mb-4 shadow-md">
+                <View className="relative">
+                    {item.image ? (
+                        <Image
+                            source={{ uri: item.image }}
+                            className="w-full h-48"
+                            resizeMode="cover"
+                        />
+                    ) : (
+                        <View className="w-full h-48 bg-gray-200 justify-center items-center">
+                            <Feather name="image" size={48} color={COLORS.gray.DEFAULT} />
+                        </View>
+                    )}
+
+                    <BlurView intensity={80} className="absolute bottom-0 w-full p-3">
+                        <Text
+                            className="text-lg font-bold text-white"
+                            style={{ fontFamily: FONTS.semiBold }}
+                        >
+                            {item.name}
+                        </Text>
+                        <Text
+                            className="text-white text-sm opacity-90"
+                            style={{ fontFamily: FONTS.medium }}
+                        >
+                            Cuisine: {getCuisineName(item.cuisineId)}
+                        </Text>
+                    </BlurView>
+                </View>
 
                 <View className="p-4">
-                    <Text
-                        className="text-lg font-semibold mb-1"
-                        style={{ fontFamily: FONTS.semiBold }}
-                    >
-                        {item.name}
-                    </Text>
-
                     {item.description && (
                         <Text
-                            className="text-gray-700 mb-2"
+                            className="text-gray-700 mb-3"
                             style={{ fontFamily: FONTS.regular }}
                             numberOfLines={2}
                         >
@@ -248,26 +306,20 @@ export default function CategoriesScreen() {
                         </Text>
                     )}
 
-                    <View className="flex-row justify-between items-center mt-2">
-                        <View>
+                    <View className="flex-row justify-between items-center mt-1">
+                        <View className="bg-gray-100 px-3 py-1 rounded-full">
                             <Text
-                                className="text-gray-500"
+                                className="text-gray-600"
                                 style={{ fontFamily: FONTS.medium }}
                             >
-                                {item.itemCount || 0} Items
-                            </Text>
-                            <Text
-                                className="text-gray-500"
-                                style={{ fontFamily: FONTS.medium }}
-                            >
-                                Cuisine: {getCuisineName(item.cuisineId)}
+                                {item.itemCount || 0} Produits
                             </Text>
                         </View>
 
                         <View className="flex-row">
                             <TouchableOpacity
                                 onPress={() => handleEditCategory(item)}
-                                className="mr-2 p-2 rounded-full"
+                                className="mr-2 p-3 rounded-full"
                                 style={{ backgroundColor: COLORS.info }}
                             >
                                 <Feather name="edit-2" size={16} color="white" />
@@ -275,7 +327,7 @@ export default function CategoriesScreen() {
 
                             <TouchableOpacity
                                 onPress={() => handleDeleteCategory(item.id)}
-                                className="p-2 rounded-full"
+                                className="p-3 rounded-full"
                                 style={{ backgroundColor: COLORS.error }}
                             >
                                 <Feather name="trash-2" size={16} color="white" />
@@ -287,19 +339,108 @@ export default function CategoriesScreen() {
         );
     };
 
-    // Cuisine Selection Modal
+    // Modale de filtres
+    const renderFilterModal = () => {
+        if (!filterModalVisible) return null;
+
+        return (
+            <View className="absolute inset-0 bg-black bg-opacity-50 justify-center items-center p-4 z-20">
+                <View className="bg-white w-full rounded-2xl p-6 max-w-md">
+                    <View className="flex-row justify-between items-center mb-6">
+                        <Text
+                            className="text-xl font-semibold"
+                            style={{ fontFamily: FONTS.semiBold }}
+                        >
+                            Filtrer les catégories
+                        </Text>
+
+                        <TouchableOpacity onPress={() => setFilterModalVisible(false)}>
+                            <Feather name="x" size={24} color={COLORS.gray.DEFAULT} />
+                        </TouchableOpacity>
+                    </View>
+
+                    <View className="mb-6">
+                        <Text
+                            className="text-gray-700 mb-2"
+                            style={{ fontFamily: FONTS.medium }}
+                        >
+                            Cuisine
+                        </Text>
+                        <TouchableOpacity
+                            className="border border-gray-300 rounded-xl p-3 flex-row justify-between items-center"
+                            onPress={() => {
+                                setCuisineModalVisible(true);
+                                setFilterModalVisible(false);
+                            }}
+                        >
+                            <Text
+                                style={{ fontFamily: FONTS.regular }}
+                                className={selectedCuisineFilter ? "text-gray-800" : "text-gray-400"}
+                            >
+                                {selectedCuisineFilter ? getCuisineName(selectedCuisineFilter) : "Toutes les cuisines"}
+                            </Text>
+                            <Feather name="chevron-down" size={20} color={COLORS.gray.DEFAULT} />
+                        </TouchableOpacity>
+                    </View>
+
+                    <View className="flex-row justify-end space-x-3">
+                        <TouchableOpacity
+                            onPress={() => {
+                                setSelectedCuisineFilter(null);
+                                setFilterModalVisible(false);
+                            }}
+                            className="px-5 py-3 rounded-xl"
+                            style={{
+                                backgroundColor: COLORS.gray.light,
+                            }}
+                        >
+                            <Text
+                                className="text-gray-700"
+                                style={{ fontFamily: FONTS.medium }}
+                            >
+                                Réinitialiser
+                            </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            onPress={() => setFilterModalVisible(false)}
+                            className="px-5 py-3 rounded-xl"
+                            style={{
+                                backgroundColor: COLORS.primary.DEFAULT,
+                            }}
+                        >
+                            <Text
+                                className="text-white"
+                                style={{ fontFamily: FONTS.medium }}
+                            >
+                                Appliquer
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </View>
+        );
+    };
+
+    // Modale de sélection de cuisine
     const renderCuisineModal = () => {
         if (!cuisineModalVisible) return null;
 
         return (
             <View className="absolute inset-0 bg-black bg-opacity-50 justify-center items-center p-4 z-20">
-                <View className="bg-white w-full rounded-lg p-6 max-w-md max-h-96">
-                    <Text
-                        className="text-xl font-semibold mb-4"
-                        style={{ fontFamily: FONTS.semiBold }}
-                    >
-                        Select Cuisine
-                    </Text>
+                <View className="bg-white w-full rounded-2xl p-6 max-w-md max-h-96">
+                    <View className="flex-row justify-between items-center mb-4">
+                        <Text
+                            className="text-xl font-semibold"
+                            style={{ fontFamily: FONTS.semiBold }}
+                        >
+                            Sélectionner une cuisine
+                        </Text>
+
+                        <TouchableOpacity onPress={() => setCuisineModalVisible(false)}>
+                            <Feather name="x" size={24} color={COLORS.gray.DEFAULT} />
+                        </TouchableOpacity>
+                    </View>
 
                     <FlatList
                         data={cuisines}
@@ -308,13 +449,21 @@ export default function CategoriesScreen() {
                             <TouchableOpacity
                                 className="p-3 border-b border-gray-200"
                                 onPress={() => {
-                                    setSelectedCuisineId(item.id);
-                                    setCuisineModalVisible(false);
+                                    if (filterModalVisible) {
+                                        setSelectedCuisineFilter(item.id);
+                                        setCuisineModalVisible(false);
+                                        setFilterModalVisible(true);
+                                    } else {
+                                        setSelectedCuisineId(item.id);
+                                        setCuisineModalVisible(false);
+                                    }
                                 }}
                             >
                                 <Text
                                     className={`${
-                                        selectedCuisineId === item.id ? 'text-primary-600' : 'text-gray-800'
+                                        (filterModalVisible ? selectedCuisineFilter : selectedCuisineId) === item.id
+                                            ? 'text-primary-600'
+                                            : 'text-gray-800'
                                     }`}
                                     style={{ fontFamily: FONTS.medium }}
                                 >
@@ -323,172 +472,168 @@ export default function CategoriesScreen() {
                             </TouchableOpacity>
                         )}
                     />
-
-                    <TouchableOpacity
-                        onPress={() => setCuisineModalVisible(false)}
-                        className="mt-4 px-4 py-2 self-end rounded-lg"
-                        style={{
-                            backgroundColor: COLORS.gray.light,
-                            borderRadius: BORDER_RADIUS.md
-                        }}
-                    >
-                        <Text
-                            className="text-gray-700"
-                            style={{ fontFamily: FONTS.medium }}
-                        >
-                            Cancel
-                        </Text>
-                    </TouchableOpacity>
                 </View>
             </View>
         );
     };
 
-    // Category Modal
+    // Modale de catégorie
     const renderModal = () => {
         if (!modalVisible) return null;
 
         return (
             <View className="absolute inset-0 bg-black bg-opacity-50 justify-center items-center p-4 z-10">
-                <View className="bg-white w-full rounded-lg p-6 max-w-md">
-                    <Text
-                        className="text-xl font-semibold mb-4"
-                        style={{ fontFamily: FONTS.semiBold }}
-                    >
-                        {editMode ? 'Edit Category' : 'Add New Category'}
-                    </Text>
-
-                    <TouchableOpacity
-                        onPress={pickImage}
-                        className="w-full h-40 rounded-lg mb-4 justify-center items-center border-2 border-dashed border-gray-300"
-                        style={{ borderRadius: BORDER_RADIUS.md }}
-                    >
-                        {image ? (
-                            <Image
-                                source={{ uri: image }}
-                                className="w-full h-full rounded-lg"
-                                resizeMode="cover"
-                            />
-                        ) : (
-                            <View className="items-center">
-                                <Feather name="image" size={48} color={COLORS.gray.DEFAULT} />
+                <View className="bg-white w-full rounded-2xl p-6 max-w-md">
+                    {loading ? (
+                        <View className="items-center justify-center py-10">
+                            <ActivityIndicator size="large" color={COLORS.primary.DEFAULT} />
+                            <Text
+                                className="mt-4 text-gray-600"
+                                style={{ fontFamily: FONTS.medium }}
+                            >
+                                {editMode ? 'Mise à jour de la catégorie...' : 'Ajout de la catégorie...'}
+                            </Text>
+                        </View>
+                    ) : (
+                        <>
+                            <View className="flex-row justify-between items-center mb-6">
                                 <Text
-                                    className="text-gray-500 mt-2"
+                                    className="text-xl font-semibold"
+                                    style={{ fontFamily: FONTS.semiBold }}
+                                >
+                                    {editMode ? 'Modifier la catégorie' : 'Ajouter une nouvelle catégorie'}
+                                </Text>
+
+                                <TouchableOpacity onPress={() => setModalVisible(false)}>
+                                    <Feather name="x" size={24} color={COLORS.gray.DEFAULT} />
+                                </TouchableOpacity>
+                            </View>
+
+                            <TouchableOpacity
+                                onPress={pickImage}
+                                className="w-full h-48 rounded-xl mb-4 justify-center items-center border-2 border-dashed border-gray-300"
+                            >
+                                {image ? (
+                                    <Image
+                                        source={{ uri: image }}
+                                        className="w-full h-full rounded-xl"
+                                        resizeMode="cover"
+                                    />
+                                ) : (
+                                    <View className="items-center">
+                                        <Feather name="image" size={48} color={COLORS.gray.DEFAULT} />
+                                        <Text
+                                            className="text-gray-500 mt-2"
+                                            style={{ fontFamily: FONTS.medium }}
+                                        >
+                                            Appuyez pour sélectionner une image
+                                        </Text>
+                                    </View>
+                                )}
+                            </TouchableOpacity>
+
+                            <View className="mb-4">
+                                <Text
+                                    className="text-gray-700 mb-1"
                                     style={{ fontFamily: FONTS.medium }}
                                 >
-                                    Tap to select image
+                                    Nom
                                 </Text>
+                                <TextInput
+                                    className="border border-gray-300 rounded-xl p-3"
+                                    style={{ fontFamily: FONTS.regular }}
+                                    value={name}
+                                    onChangeText={setName}
+                                    placeholder="Entrez le nom de la catégorie"
+                                />
                             </View>
-                        )}
-                    </TouchableOpacity>
 
-                    <View className="mb-4">
-                        <Text
-                            className="text-gray-700 mb-1"
-                            style={{ fontFamily: FONTS.medium }}
-                        >
-                            Name
-                        </Text>
-                        <TextInput
-                            className="border border-gray-300 rounded-lg p-3"
-                            style={{
-                                fontFamily: FONTS.regular,
-                                borderRadius: BORDER_RADIUS.md
-                            }}
-                            value={name}
-                            onChangeText={setName}
-                            placeholder="Enter category name"
-                        />
-                    </View>
+                            <View className="mb-4">
+                                <Text
+                                    className="text-gray-700 mb-1"
+                                    style={{ fontFamily: FONTS.medium }}
+                                >
+                                    Description
+                                </Text>
+                                <TextInput
+                                    className="border border-gray-300 rounded-xl p-3"
+                                    style={{
+                                        fontFamily: FONTS.regular,
+                                        minHeight: 80,
+                                        textAlignVertical: 'top'
+                                    }}
+                                    value={description}
+                                    onChangeText={setDescription}
+                                    placeholder="Entrez la description de la catégorie"
+                                    multiline
+                                    numberOfLines={3}
+                                />
+                            </View>
 
-                    <View className="mb-4">
-                        <Text
-                            className="text-gray-700 mb-1"
-                            style={{ fontFamily: FONTS.medium }}
-                        >
-                            Description
-                        </Text>
-                        <TextInput
-                            className="border border-gray-300 rounded-lg p-3"
-                            style={{
-                                fontFamily: FONTS.regular,
-                                borderRadius: BORDER_RADIUS.md,
-                                minHeight: 80,
-                                textAlignVertical: 'top'
-                            }}
-                            value={description}
-                            onChangeText={setDescription}
-                            placeholder="Enter category description"
-                            multiline
-                            numberOfLines={3}
-                        />
-                    </View>
+                            <View className="mb-6">
+                                <Text
+                                    className="text-gray-700 mb-1"
+                                    style={{ fontFamily: FONTS.medium }}
+                                >
+                                    Cuisine
+                                </Text>
+                                <TouchableOpacity
+                                    className="border border-gray-300 rounded-xl p-3 flex-row justify-between items-center"
+                                    style={{ borderRadius: BORDER_RADIUS.md }}
+                                    onPress={() => setCuisineModalVisible(true)}
+                                >
+                                    <Text
+                                        style={{ fontFamily: FONTS.regular }}
+                                        className={selectedCuisineId ? "text-gray-800" : "text-gray-400"}
+                                    >
+                                        {selectedCuisineId ? getCuisineName(selectedCuisineId) : "Sélectionnez une cuisine"}
+                                    </Text>
+                                    <Feather name="chevron-down" size={20} color={COLORS.gray.DEFAULT} />
+                                </TouchableOpacity>
+                            </View>
 
-                    <View className="mb-4">
-                        <Text
-                            className="text-gray-700 mb-1"
-                            style={{ fontFamily: FONTS.medium }}
-                        >
-                            Cuisine
-                        </Text>
-                        <TouchableOpacity
-                            className="border border-gray-300 rounded-lg p-3 flex-row justify-between items-center"
-                            style={{ borderRadius: BORDER_RADIUS.md }}
-                            onPress={() => setCuisineModalVisible(true)}
-                        >
-                            <Text
-                                style={{ fontFamily: FONTS.regular }}
-                                className={selectedCuisineId ? "text-gray-800" : "text-gray-400"}
-                            >
-                                {selectedCuisineId ? getCuisineName(selectedCuisineId) : "Select a cuisine"}
-                            </Text>
-                            <Feather name="chevron-down" size={20} color={COLORS.gray.DEFAULT} />
-                        </TouchableOpacity>
-                    </View>
+                            <View className="flex-row justify-end space-x-3">
+                                <TouchableOpacity
+                                    onPress={() => setModalVisible(false)}
+                                    className="px-5 py-3 rounded-xl"
+                                    style={{
+                                        backgroundColor: COLORS.gray.light,
+                                    }}
+                                >
+                                    <Text
+                                        className="text-gray-700"
+                                        style={{ fontFamily: FONTS.medium }}
+                                    >
+                                        Annuler
+                                    </Text>
+                                </TouchableOpacity>
 
-                    <View className="flex-row justify-end mt-2">
-                        <TouchableOpacity
-                            onPress={() => setModalVisible(false)}
-                            className="mr-2 px-4 py-2 rounded-lg"
-                            style={{
-                                backgroundColor: COLORS.gray.light,
-                                borderRadius: BORDER_RADIUS.md
-                            }}
-                        >
-                            <Text
-                                className="text-gray-700"
-                                style={{ fontFamily: FONTS.medium }}
-                            >
-                                Cancel
-                            </Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                            onPress={handleSaveCategory}
-                            className="px-4 py-2 rounded-lg"
-                            style={{
-                                backgroundColor: COLORS.primary.DEFAULT,
-                                borderRadius: BORDER_RADIUS.md
-                            }}
-                        >
-                            <Text
-                                className="text-white"
-                                style={{ fontFamily: FONTS.medium }}
-                            >
-                                Save
-                            </Text>
-                        </TouchableOpacity>
-                    </View>
+                                <TouchableOpacity
+                                    onPress={handleSaveCategory}
+                                    className="px-5 py-3 rounded-xl"
+                                    style={{
+                                        backgroundColor: COLORS.primary.DEFAULT,
+                                    }}
+                                >
+                                    <Text
+                                        className="text-white"
+                                        style={{ fontFamily: FONTS.medium }}
+                                    >
+                                        Enregistrer
+                                    </Text>
+                                </TouchableOpacity>
+                            </View>
+                        </>
+                    )}
                 </View>
             </View>
         );
     };
-
     if (loading && !refreshing) {
         return (
             <View className="flex-1 justify-center items-center bg-gray-50">
                 <ActivityIndicator size="large" color={COLORS.primary.DEFAULT} />
-                <Text className="mt-2" style={{ fontFamily: FONTS.medium }}>Loading categories...</Text>
+                <Text className="mt-2" style={{ fontFamily: FONTS.medium }}>Chargement des catégories...</Text>
             </View>
         );
     }
@@ -496,37 +641,47 @@ export default function CategoriesScreen() {
     return (
         <>
             <StatusBar style="light" />
-            <View className="flex-1 bg-gray-50 px-4 pt-2">
-                <TouchableOpacity
-                    onPress={handleAddCategory}
-                    className="mb-4 p-3 rounded-lg flex-row items-center justify-center"
-                    style={{ backgroundColor: COLORS.primary.DEFAULT }}
-                >
-                    <Feather name="plus" size={18} color="white" />
-                    <Text
-                        className="text-white ml-2"
-                        style={{ fontFamily: FONTS.medium }}
+            <View className="flex-1 bg-gray-50 px-4 pt-4">
+                <View className="flex-row justify-between items-center mb-4">
+                    <TouchableOpacity
+                        onPress={handleAddCategory}
+                        className="p-4 rounded-xl flex-row items-center justify-center shadow-sm flex-1 mr-2"
+                        style={{ backgroundColor: COLORS.primary.DEFAULT }}
                     >
-                        Add Category
-                    </Text>
-                </TouchableOpacity>
+                        <Feather name="plus" size={18} color="white" />
+                        <Text
+                            className="text-white ml-2 font-medium"
+                            style={{ fontFamily: FONTS.medium }}
+                        >
+                            Ajouter une catégorie
+                        </Text>
+                    </TouchableOpacity>
 
-                {categories.length === 0 ? (
+                    <TouchableOpacity
+                        onPress={() => setFilterModalVisible(true)}
+                        className="p-4 rounded-xl items-center justify-center shadow-sm"
+                        style={{ backgroundColor: COLORS.white }}
+                    >
+                        <Feather name="filter" size={22} color={COLORS.primary.DEFAULT} />
+                    </TouchableOpacity>
+                </View>
+
+                {filteredCategories.length === 0 ? (
                     <View className="flex-1 justify-center items-center">
                         <Feather name="layers" size={64} color={COLORS.gray.DEFAULT} />
                         <Text
                             className="text-lg text-gray-500 mt-4 text-center"
                             style={{ fontFamily: FONTS.medium }}
                         >
-                            No categories found
+                            Aucune catégorie trouvée
                         </Text>
                     </View>
                 ) : (
                     <FlatList
-                        data={categories}
+                        data={filteredCategories}
                         renderItem={renderItem}
                         keyExtractor={(item) => item.id}
-                        contentContainerStyle={{ paddingBottom: 16 }}
+                        contentContainerStyle={{ paddingBottom: 20 }}
                         showsVerticalScrollIndicator={false}
                         refreshing={refreshing}
                         onRefresh={handleRefresh}
@@ -536,6 +691,7 @@ export default function CategoriesScreen() {
 
             {renderModal()}
             {renderCuisineModal()}
+            {renderFilterModal()}
         </>
     );
 }

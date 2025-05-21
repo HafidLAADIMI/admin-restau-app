@@ -7,9 +7,10 @@ import { useRouter } from 'expo-router';
 import { getAuth, signOut } from 'firebase/auth';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getFirestore, collection, query, where, getDocs, getDoc, doc } from 'firebase/firestore';
-import { getCuisines, getCategories, getOrders } from '../../lib/firebase';
-
-// Define types for dashboard stats
+import { getOrders } from '../../services/orderService';
+import { getCuisines } from '../../services/cuisineService';
+import { getCategories } from '../../services/categoryService';
+// Définir les types pour les statistiques du tableau de bord
 interface DashboardStats {
     totalOrders: number;
     pendingOrders: number;
@@ -41,22 +42,22 @@ export default function DashboardScreen() {
         try {
             setLoading(true);
 
-            // Fetch cuisines, categories, orders
+            // Récupérer les cuisines, catégories, commandes
             const [cuisines, categories, orders] = await Promise.all([
                 getCuisines(),
                 getCategories(),
                 getOrders()
             ]);
 
-            // Fetch total products count
+            // Récupérer le nombre total de produits
             const productsRef = collection(db, 'products');
             const productsSnapshot = await getDocs(productsRef);
 
-            // Calculate stats
+            // Calculer les statistiques
             const pendingOrders = orders.filter(o => o.status === 'pending').length;
             const completedOrders = orders.filter(o => o.status === 'completed').length;
 
-            // Get recent orders (last 5)
+            // Récupérer les commandes récentes (5 dernières)
             const recentOrders = orders
                 .sort((a, b) => {
                     const dateA = a.createdAt?.toDate?.() ?? new Date(a.createdAt);
@@ -65,7 +66,7 @@ export default function DashboardScreen() {
                 })
                 .slice(0, 5);
 
-            // Fetch admin details
+            // Récupérer les détails de l'administrateur
             const userId = await AsyncStorage.getItem('userId');
             if (userId) {
                 const adminDoc = await getDoc(doc(db, 'users', userId));
@@ -74,7 +75,7 @@ export default function DashboardScreen() {
                 }
             }
 
-            // Update stats
+            // Mettre à jour les statistiques
             setStats({
                 totalOrders: orders.length,
                 pendingOrders,
@@ -124,11 +125,26 @@ export default function DashboardScreen() {
         }
     };
 
+    const getOrderStatusText = (status: string) => {
+        switch (status) {
+            case 'pending':
+                return 'En attente';
+            case 'in-progress':
+                return 'En cours';
+            case 'completed':
+                return 'Terminée';
+            case 'cancelled':
+                return 'Annulée';
+            default:
+                return 'Inconnu';
+        }
+    };
+
     const formatDate = (timestamp: any) => {
-        if (!timestamp) return 'Unknown date';
+        if (!timestamp) return 'Date inconnue';
 
         const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-        return date.toLocaleDateString('en-US', {
+        return date.toLocaleDateString('fr-FR', {
             year: 'numeric',
             month: 'short',
             day: 'numeric',
@@ -141,7 +157,7 @@ export default function DashboardScreen() {
         return (
             <View className="flex-1 justify-center items-center bg-gray-50">
                 <ActivityIndicator size="large" color={COLORS.primary.DEFAULT} />
-                <Text className="mt-2" style={{ fontFamily: FONTS.medium }}>Loading dashboard...</Text>
+                <Text className="mt-2" style={{ fontFamily: FONTS.medium }}>Chargement du tableau de bord...</Text>
             </View>
         );
     }
@@ -150,15 +166,15 @@ export default function DashboardScreen() {
         <>
             <StatusBar style="light" />
             <ScrollView className="flex-1 bg-gray-50">
-                {/* Welcome Section */}
+                {/* Section de bienvenue */}
                 <View className="bg-primary-600 px-4 pt-4 pb-8" style={{ backgroundColor: COLORS.primary.DEFAULT }}>
                     <View className="flex-row justify-between items-center mb-4">
                         <View>
                             <Text className="text-white text-xl" style={{ fontFamily: FONTS.semiBold }}>
-                                Welcome back,
+                                Bienvenue,
                             </Text>
                             <Text className="text-white opacity-80" style={{ fontFamily: FONTS.regular }}>
-                                {admin?.email || 'Admin'}
+                                {admin?.email || 'Administrateur'}
                             </Text>
                         </View>
 
@@ -171,24 +187,24 @@ export default function DashboardScreen() {
                     </View>
                 </View>
 
-                {/* Stats Cards */}
+                {/* Cartes de statistiques */}
                 <View className="px-4 -mt-4">
-                    <View className="bg-white rounded-lg shadow-sm p-4 mb-4">
+                    <View className="bg-white rounded-xl shadow-md p-4 mb-4">
                         <Text className="text-lg mb-4" style={{ fontFamily: FONTS.semiBold }}>
-                            Orders Overview
+                            Aperçu des commandes
                         </Text>
 
                         <View className="flex-row justify-between">
-                            <View className="items-center flex-1 bg-gray-50 rounded-lg py-3 mr-2">
+                            <View className="items-center flex-1 bg-gray-50 rounded-xl py-3 mr-2">
                                 <Text className="text-2xl font-bold" style={{ fontFamily: FONTS.bold }}>
                                     {stats.totalOrders}
                                 </Text>
                                 <Text className="text-gray-500 text-sm" style={{ fontFamily: FONTS.medium }}>
-                                    Total Orders
+                                    Total
                                 </Text>
                             </View>
 
-                            <View className="items-center flex-1 bg-gray-50 rounded-lg py-3 mr-2">
+                            <View className="items-center flex-1 bg-gray-50 rounded-xl py-3 mr-2">
                                 <Text
                                     className="text-2xl font-bold"
                                     style={{ fontFamily: FONTS.bold, color: COLORS.warning }}
@@ -196,11 +212,11 @@ export default function DashboardScreen() {
                                     {stats.pendingOrders}
                                 </Text>
                                 <Text className="text-gray-500 text-sm" style={{ fontFamily: FONTS.medium }}>
-                                    Pending
+                                    En attente
                                 </Text>
                             </View>
 
-                            <View className="items-center flex-1 bg-gray-50 rounded-lg py-3">
+                            <View className="items-center flex-1 bg-gray-50 rounded-xl py-3">
                                 <Text
                                     className="text-2xl font-bold"
                                     style={{ fontFamily: FONTS.bold, color: COLORS.success }}
@@ -208,19 +224,19 @@ export default function DashboardScreen() {
                                     {stats.completedOrders}
                                 </Text>
                                 <Text className="text-gray-500 text-sm" style={{ fontFamily: FONTS.medium }}>
-                                    Completed
+                                    Terminées
                                 </Text>
                             </View>
                         </View>
                     </View>
 
-                    <View className="bg-white rounded-lg shadow-sm p-4 mb-4">
+                    <View className="bg-white rounded-xl shadow-md p-4 mb-4">
                         <Text className="text-lg mb-4" style={{ fontFamily: FONTS.semiBold }}>
-                            Catalog Overview
+                            Aperçu du catalogue
                         </Text>
 
                         <View className="flex-row justify-between">
-                            <View className="items-center flex-1 bg-gray-50 rounded-lg py-3 mr-2">
+                            <View className="items-center flex-1 bg-gray-50 rounded-xl py-3 mr-2">
                                 <Text className="text-2xl font-bold" style={{ fontFamily: FONTS.bold }}>
                                     {stats.totalCuisines}
                                 </Text>
@@ -229,30 +245,30 @@ export default function DashboardScreen() {
                                 </Text>
                             </View>
 
-                            <View className="items-center flex-1 bg-gray-50 rounded-lg py-3 mr-2">
+                            <View className="items-center flex-1 bg-gray-50 rounded-xl py-3 mr-2">
                                 <Text className="text-2xl font-bold" style={{ fontFamily: FONTS.bold }}>
                                     {stats.totalCategories}
                                 </Text>
                                 <Text className="text-gray-500 text-sm" style={{ fontFamily: FONTS.medium }}>
-                                    Categories
+                                    Catégories
                                 </Text>
                             </View>
 
-                            <View className="items-center flex-1 bg-gray-50 rounded-lg py-3">
+                            <View className="items-center flex-1 bg-gray-50 rounded-xl py-3">
                                 <Text className="text-2xl font-bold" style={{ fontFamily: FONTS.bold }}>
                                     {stats.totalProducts}
                                 </Text>
                                 <Text className="text-gray-500 text-sm" style={{ fontFamily: FONTS.medium }}>
-                                    Products
+                                    Produits
                                 </Text>
                             </View>
                         </View>
                     </View>
 
-                    {/* Quick Actions */}
-                    <View className="bg-white rounded-lg shadow-sm p-4 mb-4">
+                    {/* Actions rapides */}
+                    <View className="bg-white rounded-xl shadow-md p-4 mb-4">
                         <Text className="text-lg mb-4" style={{ fontFamily: FONTS.semiBold }}>
-                            Quick Actions
+                            Actions rapides
                         </Text>
 
                         <View className="flex-row flex-wrap">
@@ -267,7 +283,7 @@ export default function DashboardScreen() {
                                     <Ionicons name="list" size={22} color={COLORS.primary.DEFAULT} />
                                 </View>
                                 <Text className="text-xs text-center" style={{ fontFamily: FONTS.medium }}>
-                                    Orders
+                                    Commandes
                                 </Text>
                             </TouchableOpacity>
 
@@ -297,7 +313,7 @@ export default function DashboardScreen() {
                                     <Feather name="layers" size={22} color={COLORS.warning} />
                                 </View>
                                 <Text className="text-xs text-center" style={{ fontFamily: FONTS.medium }}>
-                                    Categories
+                                    Catégories
                                 </Text>
                             </TouchableOpacity>
 
@@ -312,17 +328,17 @@ export default function DashboardScreen() {
                                     <Feather name="package" size={22} color={COLORS.info} />
                                 </View>
                                 <Text className="text-xs text-center" style={{ fontFamily: FONTS.medium }}>
-                                    Products
+                                    Produits
                                 </Text>
                             </TouchableOpacity>
                         </View>
                     </View>
 
-                    {/* Recent Orders */}
-                    <View className="bg-white rounded-lg shadow-sm p-4 mb-4">
+                    {/* Commandes récentes */}
+                    <View className="bg-white rounded-xl shadow-md p-4 mb-4">
                         <View className="flex-row justify-between items-center mb-4">
                             <Text className="text-lg" style={{ fontFamily: FONTS.semiBold }}>
-                                Recent Orders
+                                Commandes récentes
                             </Text>
 
                             <TouchableOpacity onPress={handleRefresh}>
@@ -334,7 +350,7 @@ export default function DashboardScreen() {
                             <View className="items-center py-6">
                                 <Ionicons name="receipt-outline" size={48} color={COLORS.gray.DEFAULT} />
                                 <Text className="text-gray-500 mt-2" style={{ fontFamily: FONTS.medium }}>
-                                    No recent orders found
+                                    Aucune commande récente
                                 </Text>
                             </View>
                         ) : (
@@ -348,7 +364,7 @@ export default function DashboardScreen() {
                                     <View className="flex-row justify-between items-center">
                                         <View>
                                             <Text style={{ fontFamily: FONTS.semiBold }}>
-                                                Order #{order.id.slice(0, 6)}
+                                                Commande #{order.id.slice(0, 6)}
                                             </Text>
                                             <Text
                                                 className="text-gray-500 text-xs"
@@ -363,18 +379,18 @@ export default function DashboardScreen() {
                                                 className="text-gray-700 mr-2"
                                                 style={{ fontFamily: FONTS.medium }}
                                             >
-                                                ${order.total.toFixed(2)}
+                                                {order.total.toFixed(2).replace('.', ',')} €
                                             </Text>
 
                                             <View
-                                                className="px-2 py-1 rounded"
+                                                className="px-2 py-1 rounded-full"
                                                 style={{ backgroundColor: getOrderStatusColor(order.status) }}
                                             >
                                                 <Text
                                                     className="text-white text-xs capitalize"
                                                     style={{ fontFamily: FONTS.medium }}
                                                 >
-                                                    {order.status}
+                                                    {getOrderStatusText(order.status)}
                                                 </Text>
                                             </View>
                                         </View>
@@ -385,7 +401,7 @@ export default function DashboardScreen() {
 
                         <TouchableOpacity
                             className="mt-3 items-center py-2"
-                            onPress={() => router.push('/dashboard/orders')}
+                            onPress={() => router.push('/orders')}
                         >
                             <Text
                                 className="text-primary-600"
@@ -394,7 +410,7 @@ export default function DashboardScreen() {
                                     color: COLORS.primary.DEFAULT
                                 }}
                             >
-                                View All Orders
+                                Voir toutes les commandes
                             </Text>
                         </TouchableOpacity>
                     </View>

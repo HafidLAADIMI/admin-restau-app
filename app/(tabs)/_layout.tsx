@@ -23,6 +23,11 @@ export default function TabsLayout() {
                     height: 60 + insets.bottom,
                     paddingBottom: insets.bottom,
                     paddingTop: 10,
+                    elevation: 8,
+                    shadowColor: '#000',
+                    shadowOffset: { width: 0, height: -2 },
+                    shadowOpacity: 0.1,
+                    shadowRadius: 4,
                 },
                 tabBarLabelStyle: {
                     fontFamily: FONTS.medium,
@@ -34,8 +39,8 @@ export default function TabsLayout() {
             <Tabs.Screen
                 name="index"
                 options={{
-                    title: 'Dashboard',
-                    tabBarLabel: 'Dashboard',
+                    title: 'Tableau de Bord',
+                    tabBarLabel: 'Tableau',
                     tabBarIcon: ({ color, size }) => (
                         <Ionicons name="grid" size={size} color={color} />
                     ),
@@ -44,10 +49,10 @@ export default function TabsLayout() {
             <Tabs.Screen
                 name="orders"
                 options={{
-                    title: 'Orders',
-                    tabBarLabel: 'Orders',
+                    title: 'Commandes',
+                    tabBarLabel: 'Commandes',
                     tabBarIcon: ({ color, size }) => (
-                        <Ionicons name="list" size={size} color={color} />
+                        <Ionicons name="receipt-outline" size={size} color={color} />
                     ),
                 }}
             />
@@ -64,8 +69,8 @@ export default function TabsLayout() {
             <Tabs.Screen
                 name="categories"
                 options={{
-                    title: 'Categories',
-                    tabBarLabel: 'Categories',
+                    title: 'Catégories',
+                    tabBarLabel: 'Catégories',
                     tabBarIcon: ({ color, size }) => (
                         <Feather name="layers" size={size} color={color} />
                     ),
@@ -74,8 +79,8 @@ export default function TabsLayout() {
             <Tabs.Screen
                 name="products"
                 options={{
-                    title: 'Products',
-                    tabBarLabel: 'Products',
+                    title: 'Produits',
+                    tabBarLabel: 'Produits',
                     tabBarIcon: ({ color, size }) => (
                         <Feather name="package" size={size} color={color} />
                     ),

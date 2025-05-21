@@ -32,5 +32,31 @@ export const handleFirestoreOperation = async (operation, defaultValue = null) =
 
 
 
+export interface Product {
+    id: string;
+    name: string;
+    price: number;
+    originalPrice?: number;
+    discountedPrice?: number;
+    description: string;
+    image: string;
+    rating?: number;
+    reviewCount?: number;
+    category?: string;
+    subCategory?: string;
+    isVeg: boolean;
+    cuisineId: string;
+}
 
 
+
+export interface OrderDeliveryData {
+    receivedBy: string;
+    notes: string;
+    amountCollected: number;
+    signatureUrl: string | null;
+    proofOfDeliveryUrl: string | null;
+    deliveredAt: Date;
+    deliveredBy: string;
+    deliverymanName: string;
+}
