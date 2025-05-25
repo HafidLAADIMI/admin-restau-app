@@ -4,11 +4,11 @@
     "slug": "restau-manager",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/logoWithBg.png",
+    "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/logoWithoutBg.png",
+      "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
@@ -18,14 +18,14 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/logoWithoutBg.png",
+        "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
       "versionCode": 1,
       "package": "com.restaumanager.app"
     },
     "web": {
-      "favicon": "./assets/logoWithoutBg.png"
+      "favicon": "./assets/favicon.png"
     },
     "plugins": [
       "expo-router"
